@@ -4,6 +4,7 @@ import { User } from "../models/user.models.js";
 import { uploadOnCloudinary } from "../utils/cloudinary.js";
 import { ApiResponse } from "../utils/ApiResponse.js";
 import jwt from "jsonwebtoken";
+import mongoose from "mongoose";
 
 const genrateAccessAndRefreshTokens = async (userId) => {
   try {
@@ -17,10 +18,7 @@ const genrateAccessAndRefreshTokens = async (userId) => {
 
     return { accessToken, refreshToken };
   } catch (error) {
-    throw new ApiError(
-      500,
-      error
-    );
+    throw new ApiError(500, error);
   }
 };
 
@@ -35,17 +33,9 @@ const registerUser = asyncHandler(async (req, res) => {
   // check for user creation
   // return res.
 
-  const {
-    fullname,
-    email,
-    password,
-  } = req.body;
+  const { fullname, email, password } = req.body;
 
-  if (
-    [fullname, email, password,].some(
-      (field) => field?.trim() === ""
-    )
-  ) {
+  if ([fullname, email, password].some((field) => field?.trim() === "")) {
     throw new ApiError(400, "All fields are required");
   }
 
@@ -71,11 +61,36 @@ const registerUser = asyncHandler(async (req, res) => {
   // }
 
   //creating object and saving to database
+
+  const nameParts = fullname.trim().split(" ");
+  const [firstname, ...rest] = nameParts;
+  const lastname = rest.pop() || "";
+  const middlename = rest.join(" ");
+
+  // Generate a unique username based on name and email for regular registration
+  const generateUsername = async (firstname, lastname, email) => {
+    const baseUsername = `${firstname.toLowerCase()}${lastname ? lastname.toLowerCase() : ""}`;
+    let username = baseUsername;
+    let counter = 1;
+
+    while (await User.findOne({ username })) {
+      username = `${baseUsername}${counter}`;
+      counter++;
+    }
+
+    return username;
+  };
+
+  const username = await generateUsername(firstname, lastname, email);
+
   const user = await User.create({
-    fullname,
-    // avatar: avatar.url,
+    username,
+    firstname,
+    middlename,
+    lastname,
     email: email.toLowerCase(),
     password,
+    // avatar: avatar.url,
   });
 
   const createdUser = await User.findById(user._id).select(
@@ -92,8 +107,8 @@ const registerUser = asyncHandler(async (req, res) => {
 
   const options = {
     httpOnly: true,
-    secure: true,
-    sameSite: 'Lax'
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Lax",
   };
 
   return res
@@ -120,7 +135,7 @@ const loginUser = asyncHandler(async (req, res) => {
   }
 
   // here "$or" is used to check multiple attributes in the database.
-  const user = await User.findOne({email});
+  const user = await User.findOne({ email });
 
   if (!user) {
     throw new ApiError(404, "User does not exist");
@@ -149,8 +164,8 @@ const loginUser = asyncHandler(async (req, res) => {
   // to avoid that to happen we make a "option" object and define these two field.
   const options = {
     httpOnly: true,
-    secure: true,
-    sameSite: 'Lax'
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "Lax",
   };
 
   // sending these tokens to the backend as cookies.
@@ -178,8 +193,8 @@ const logoutUser = asyncHandler(async (req, res) => {
     // Just clear the cookies
     const options = {
       httpOnly: true,
-      secure: true,
-      sameSite: 'Lax'
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Lax",
     };
 
     return res
@@ -193,54 +208,112 @@ const logoutUser = asyncHandler(async (req, res) => {
   }
 });
 
-
 const refreshAccessToken = asyncHandler(async (req, res) => {
-  const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken;
+  const incomingRefreshToken =
+    req.cookies.refreshToken || req.body.refreshToken;
 
   if (!incomingRefreshToken) {
-    throw new ApiError(401, "Unauthorized Request");
+    throw new ApiError(401, "Unauthorized Request - No refresh token provided");
   }
 
-
   try {
-    const decodedToken = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
+    const decodedToken = jwt.verify(
+      incomingRefreshToken,
+      process.env.REFRESH_TOKEN_SECRET
+    );
+    const user = await User.findById(decodedToken._id).select("-password");
 
-    const user = await User.findById(decodedToken._id);
-
-    
-    if (!user || incomingRefreshToken !== user.refreshToken) {
-      throw new ApiError(401, "Invalid Refresh Token");
+    if (!user) {
+      throw new ApiError(401, "Invalid Refresh Token - User not found");
     }
 
-    const { accessToken, refreshToken } = await genrateAccessAndRefreshTokens(user._id);
+    if (incomingRefreshToken !== user.refreshToken) {
+      throw new ApiError(401, "Invalid Refresh Token - Token mismatch");
+    }
+
+    const { accessToken, refreshToken } = await genrateAccessAndRefreshTokens(
+      user._id
+    );
+
+    // Get updated user data without password and refreshToken
+    const updatedUser = await User.findById(user._id).select(
+      "-password -refreshToken"
+    );
 
     const cookieOptions = {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'Lax',
+      secure: process.env.NODE_ENV === "production",
+      sameSite: "Lax",
+      maxAge: 10 * 24 * 60 * 60 * 1000, // 10 days for refresh token
     };
 
     return res
       .status(200)
-      .cookie("accessToken", accessToken, cookieOptions)
+      .cookie("accessToken", accessToken, {
+        ...cookieOptions,
+        maxAge: 15 * 60 * 1000, // 15 minutes for access token
+      })
       .cookie("refreshToken", refreshToken, cookieOptions)
-      .json(new ApiResponse(200, { accessToken, refreshToken }));
+      .json(
+        new ApiResponse(
+          200,
+          {
+            user: updatedUser,
+            accessToken,
+            refreshToken,
+          },
+          "Tokens refreshed successfully"
+        )
+      );
   } catch (error) {
     throw new ApiError(401, error.message || "Invalid Refresh Token");
   }
 });
 
 const updateAccountDetails = asyncHandler(async (req, res) => {
-  const { fullname, phone, address } = req.body;
+  const {
+    firstname,
+    middlename,
+    lastname,
+    phone,
+    country,
+    street,
+    city,
+    state,
+    pincode,
+    username,
+    interests,
+    website,
+    bio,
+    about,
+  } = req.body;
+
+  let address =
+    (street ? street + ", " : undefined) +
+    (city ? city + ", " : undefined) +
+    (state ? state + ", " : undefined) +
+    (country ? country + ", " : undefined) +
+    (pincode ? pincode : undefined);
+
+  if (!address) {
+    address = undefined;
+  }
 
   const user = await User.findByIdAndUpdate(
     req.user?._id,
     {
       $set: {
-        fullname,
+        firstname,
+        middlename,
+        lastname,
         avatar: req.body.files[0],
         phone,
-        address
+        address,
+        username,
+        interests,
+        bio,
+        about,
+        website,
       },
     },
     { new: true }
@@ -273,7 +346,9 @@ const followUser = asyncHandler(async (req, res) => {
   followedUser.follower.push(followerId); // Add the follower to the followed user's followers list
   await followedUser.save(); // Save the updated followed user
 
-  res.status(200).json(new ApiResponse(200, null, "User followed successfully."));
+  res
+    .status(200)
+    .json(new ApiResponse(200, null, "User followed successfully."));
 });
 
 const unfollowUser = asyncHandler(async (req, res) => {
@@ -288,7 +363,9 @@ const unfollowUser = asyncHandler(async (req, res) => {
   }
 
   // Remove the user being unfollowed from the follower's following list
-  followerUser.following = followerUser.following.filter(id => id.toString() !== userId);
+  followerUser.following = followerUser.following.filter(
+    (id) => id.toString() !== userId
+  );
   await followerUser.save(); // Save the updated follower user
 
   // Update the user being unfollowed (user_id)
@@ -298,10 +375,75 @@ const unfollowUser = asyncHandler(async (req, res) => {
   }
 
   // Remove the follower from the followed user's followers list
-  followedUser.follower = followedUser.follower.filter(id => id.toString() !== followerId);
+  followedUser.follower = followedUser.follower.filter(
+    (id) => id.toString() !== followerId
+  );
   await followedUser.save(); // Save the updated followed user
 
-  res.status(200).json(new ApiResponse(200, null, "User unfollowed successfully."));
+  res
+    .status(200)
+    .json(new ApiResponse(200, null, "User unfollowed successfully."));
 });
 
-export { registerUser, loginUser, logoutUser, refreshAccessToken, updateAccountDetails, followUser, unfollowUser, genrateAccessAndRefreshTokens};
+const getFollowers = asyncHandler(async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).populate(
+      "follower",
+      "firstname middlename lastname _id bio about avatar"
+    );
+
+    if (!user) {
+      throw new ApiError(404, "User not found");
+    }
+
+    res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          user.follower || [],
+          "Followers fetched successfully"
+        )
+      );
+  } catch (error) {
+    throw new ApiError(500, "Error fetching followers");
+  }
+});
+
+const getFollowing = asyncHandler(async (req, res) => {
+  try {
+    const user = await User.findById(req.user._id).populate(
+      "following",
+      "firstname middlename lastname _id bio about avatar"
+    );
+
+    if (!user) {
+      throw new ApiError(404, "User not found");
+    }
+
+    res
+      .status(200)
+      .json(
+        new ApiResponse(
+          200,
+          user.following || [],
+          "Following fetched successfully"
+        )
+      );
+  } catch (error) {
+    throw new ApiError(500, "Error fetching following");
+  }
+});
+
+export {
+  registerUser,
+  loginUser,
+  logoutUser,
+  refreshAccessToken,
+  updateAccountDetails,
+  followUser,
+  unfollowUser,
+  genrateAccessAndRefreshTokens,
+  getFollowers,
+  getFollowing,
+};

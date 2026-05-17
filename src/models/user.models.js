@@ -11,9 +11,23 @@ const userSchema = new Schema(
       lowercase: true,
       trim: true,
     },
-    fullname: {
+    username: {
+      type: String,
+      unique: true,
+      sparse: true,
+      trim: true,
+    },
+    firstname: {
       type: String,
       required: true,
+      trim: true,
+    },
+    lastname: {
+      type: String,
+      trim: true,
+    },
+    middlename: {
+      type: String,
       trim: true,
     },
     avatar: {
@@ -24,31 +38,54 @@ const userSchema = new Schema(
     },
     phone: {
       type: String,
-      sparse: true, 
+      sparse: true,
     },
     address: {
       type: String,
     },
-    follower: [{
-      type: Schema.Types.ObjectId,
-      ref: "User",
-    }],
+    follower: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
+    website: {
+      type: String,
+    },
+    bio: {
+      type: String,
+    },
+    about: {
+      type: String,
+    },
     watchList: [
       {
         type: Schema.Types.ObjectId,
         ref: "startup",
-      }
+      },
     ],
-    following: [{
-      type: Schema.Types.ObjectId,
-      ref: "User"
-    }],
+    interests: [
+      {
+        type: String,
+      },
+    ],
+    following: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "User",
+      },
+    ],
     refreshToken: {
       type: String,
     },
     isInvestor: {
       type: Boolean,
       default: false,
+    },
+    investorid: {
+      type: Schema.Types.ObjectId,
+      ref: "Investor",
+      unique: true,
     },
     isFounder: {
       type: Boolean,
@@ -58,7 +95,7 @@ const userSchema = new Schema(
     linkedinId: { type: String, unique: true, sparse: true },
     githubId: { type: String, unique: true, sparse: true },
   },
-  
+
   {
     timestamps: true,
   }
@@ -74,7 +111,7 @@ userSchema.methods.isPasswordCorrect = async function (password) {
   return await bcrypt.compare(password, this.password);
 };
 
-userSchema.methods.genrateAccessToken = function(){
+userSchema.methods.genrateAccessToken = function () {
   return jwt.sign(
     {
       _id: this._id,
@@ -88,7 +125,7 @@ userSchema.methods.genrateAccessToken = function(){
   );
 };
 
-userSchema.methods.genrateRefreshToken = function(){
+userSchema.methods.genrateRefreshToken = function () {
   return jwt.sign(
     {
       _id: this._id,
