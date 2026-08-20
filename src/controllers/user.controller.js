@@ -165,10 +165,13 @@ const loginUser = asyncHandler(async (req, res) => {
 
   // the cookies can be modifid and access by any one at the frontend.
   // to avoid that to happen we make a "option" object and define these two field.
+    const isProduction = process.env.NODE_ENV === "production";
+
   const options = {
     httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "Lax",
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+    path: "/",
   };
 
   // sending these tokens to the backend as cookies.
@@ -194,11 +197,14 @@ const logoutUser = asyncHandler(async (req, res) => {
   try {
     // No need to update the user document to remove the refresh token
     // Just clear the cookies
-    const options = {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "Lax",
-    };
+  const isProduction = process.env.NODE_ENV === "production";
+
+  const options = {
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? "none" : "lax",
+    path: "/",
+  };
 
     return res
       .status(200)
